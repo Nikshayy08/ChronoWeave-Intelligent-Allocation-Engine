@@ -1,60 +1,125 @@
+import java.util.Scanner;
 import java.util.List;
-import java.util.ArrayList;
 
-import model.Request;
-import scheduler.GreedyScheduler;
-import scheduler.PriorityScheduler;
-import scheduler.ExchangeGraph;
+import models.Request;
+import engine.AllocationEngine;
+
+/*
+ * Main Class
+ *
+ * Entry point of Smart Campus Resource Allocation System.
+ *
+ * Responsibilities:
+ * 1. Provide menu-driven console interface
+ * 2. Take user input
+ * 3. Call AllocationEngine methods
+ * 4. Display formatted results
+ *
+ * Note:
+ * All algorithm logic is handled inside AllocationEngine.
+ * Main only manages interaction (Separation of Concerns).
+ */
 
 public class Main {
 
     public static void main(String[] args) {
 
-        // -------------------------
-        // DAY 1 & DAY 2: Scheduling
-        // -------------------------
+        // Scanner object for user input
+        Scanner sc = new Scanner(System.in);
 
-        List<Request> requests = new ArrayList<>();
+        // Core system engine (handles all allocation logic)
+        AllocationEngine engine = new AllocationEngine();
 
-        requests.add(new Request("Aman", 1, 3, 1));
-        requests.add(new Request("Riya", 2, 5, 5));
-        requests.add(new Request("Karan", 4, 7, 2));
-        requests.add(new Request("Sneha", 6, 9, 8));
-        requests.add(new Request("Arjun", 8, 10, 1));
+        // Infinite loop for menu-driven system
+        while (true) {
 
-        System.out.println("All Requests:");
-        for (Request r : requests) {
-            System.out.println(r);
-        }
+            // Display Menu
+            System.out.println("\n=======================================");
+            System.out.println(" SMART CAMPUS RESOURCE ALLOCATION ");
+            System.out.println("=======================================");
+            System.out.println("1. Add Request");
+            System.out.println("2. View All Requests");
+            System.out.println("3. Run Priority Allocation");
+            System.out.println("4. Check Exchange Possibility");
+            System.out.println("5. Exit");
+            System.out.print("Enter your choice: ");
 
-        // Using Priority Scheduler (Day 2 Engine)
-        List<Request> allocated = PriorityScheduler.allocate(requests);
+            int choice = sc.nextInt();
+            sc.nextLine(); // consume leftover newline
 
-        System.out.println("\nAllocated Requests:");
-        for (Request r : allocated) {
-            System.out.println(r);
-        }
+            switch (choice) {
 
-        // -------------------------
-        // DAY 3: Exchange Graph
-        // -------------------------
+                case 1:
+                    // Add a new resource request
 
-        System.out.println("\n--- Exchange Graph Simulation ---");
+                    System.out.print("Enter Student Name: ");
+                    String name = sc.nextLine();
 
-        ExchangeGraph graph = new ExchangeGraph();
+                    System.out.print("Enter Start Time: ");
+                    int start = sc.nextInt();
 
-        graph.addStudent("A");
-        graph.addStudent("B");
-        graph.addStudent("C");
+                    System.out.print("Enter End Time: ");
+                    int end = sc.nextInt();
 
-        graph.addEdge("A", "B");
-        graph.addEdge("B", "C");
-        graph.addEdge("C", "A");
+                    System.out.print("Enter Priority (1-10): ");
+                    int priority = sc.nextInt();
 
-        if (graph.hasCycle()) {
-            System.out.println("Exchange cycle detected! Swap possible.");
-        } else {
-            System.out.println("No exchange cycle found.");
+                    // Create new Request object
+                    Request newRequest = new Request(name, start, end, priority);
+
+                    // Add request to engine
+                    engine.addRequest(newRequest);
+
+                    System.out.println("Request added successfully!");
+                    break;
+
+                case 2:
+                    // Display all stored requests
+
+                    System.out.println("\n--- All Requests ---");
+                    engine.displayAllRequests();
+                    break;
+
+                case 3:
+                    // Run Priority-Based Allocation
+
+                    System.out.println("\n--- Allocated Requests (Priority-Based) ---");
+
+                    List<Request> allocated = engine.runPriorityAllocation();
+
+                    if (allocated.isEmpty()) {
+                        System.out.println("No requests allocated.");
+                    } else {
+                        for (Request r : allocated) {
+                            System.out.println(r);
+                        }
+                    }
+                    break;
+
+                case 4:
+                    // Check for exchange cycle using graph algorithm
+
+                    System.out.println("\n--- Exchange Cycle Detection ---");
+
+                    boolean cycleExists = engine.checkExchangeCycle();
+
+                    if (cycleExists) {
+                        System.out.println("Exchange cycle detected! Swap possible.");
+                    } else {
+                        System.out.println("No exchange cycle found.");
+                    }
+                    break;
+
+                case 5:
+                    // Exit program
+
+                    System.out.println("Exiting system...");
+                    sc.close();
+                    return;
+
+                default:
+                    System.out.println("Invalid choice. Please try again.");
+            }
         }
     }
 }

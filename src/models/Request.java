@@ -1,9 +1,22 @@
-package model;
+package models;
 
-// Request class represents one student's booking request
+/*
+ * Request
+ *
+ * Represents a student's resource booking request.
+ *
+ * Attributes:
+ *  - studentName : Name of the student
+ *  - startTime   : Requested start time
+ *  - endTime     : Requested end time
+ *  - priority    : Priority level (higher value = higher importance)
+ *
+ * This class is a data model (POJO).
+ */
+
 public class Request {
 
-    // Name of the student requesting resource
+    // Name of the student requesting the resource
     public String studentName;
 
     // Start time of request
@@ -12,7 +25,7 @@ public class Request {
     // End time of request
     public int endTime;
 
-    // Higher value = higher priority
+    // Priority value (higher means more important)
     public int priority;
 
     // Constructor to initialize request object
@@ -23,7 +36,7 @@ public class Request {
         this.priority = priority;
     }
 
-    // Defines how the object will be printed
+    // String representation for printing request details
     @Override
     public String toString() {
         return studentName + " [" + startTime + " - " + endTime + "] Priority: " + priority;
