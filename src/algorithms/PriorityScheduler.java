@@ -4,70 +4,166 @@ import java.util.*;
 import models.Request;
 
 /*
- * PriorityScheduler
+ * PriorityScheduler.java
  *
- * Implements Priority-Based Interval Scheduling.
+ * Implements Priority-Based Interval Scheduling with composite scoring.
  *
- * Strategy:
- * 1. Use Max Heap (PriorityQueue) based on priority.
- * 2. Higher priority requests are processed first.
- * 3. If priorities are equal → earlier finishing time preferred.
- * 4. Check time conflicts before allocation.
+ * ─── SCHEDULING STRATEGY ─────────────────────────────────────────────────────
  *
- * Time Complexity:
- *  - Heap insertion: O(n log n)
- *  - Conflict checking: O(n²) worst case
+ * Uses a Max Heap (PriorityQueue) ordered by composite priority score:
+ *
+ *   Score = (karmaCredits × 0.5) + (deadlineUrgency × 0.3) + (waitTime × 0.2)
+ *
+ * Where:
+ *   karmaCredits   → students who contribute more get higher access priority
+ *   deadlineUrgency → earlier deadlines float to top (EDF principle)
+ *   waitTime        → aging: longer wait = higher score (prevents starvation)
+ *
+ * Tiebreaker order (if scores are equal):
+ *   1. Earlier deadline first (EDF)
+ *   2. Earlier end time first (frees slot sooner)
+ *
+ * ─── PHYSICAL vs DIGITAL BIFURCATION ─────────────────────────────────────────
+ *
+ * PHYSICAL resources:
+ *   → Interval conflict detection applied
+ *   → Only one student can hold the same resource in overlapping time
+ *   → Rejected requests go to WAITLISTED status
+ *
+ * DIGITAL resources:
+ *   → No conflict detection — PDFs/notes are infinitely shareable
+ *   → All valid digital requests are ALLOCATED directly
+ *   → This is the correct model; treating digital as scarce is a design flaw
+ *
+ * ─── TIME COMPLEXITY ─────────────────────────────────────────────────────────
+ *
+ *   Heap insertion (all n requests):  O(n log n)
+ *   Conflict check per request:       O(k)   where k = already allocated
+ *   Overall worst case:               O(n² ) — physical resources with n conflicts
+ *   Digital resources:                O(n log n) — no conflict scan needed
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
 public class PriorityScheduler {
 
     /*
-     * Allocates non-conflicting requests
-     * based on highest priority first.
+     * allocate(requests, studentKarmaMap)
+     *
+     * @param requests       List of all pending requests
+     * @param studentKarmaMap  Map of studentName → karmaCredits (for score computation)
+     * @return               List of allocated requests (status updated in place)
      */
-    public static List<Request> allocate(List<Request> requests) {
+    public static List<Request> allocate(List<Request> requests,
+                                         Map<String, Integer> studentKarmaMap) {
 
-        // Max Heap based on priority
+        // ── Build Max Heap ordered by composite priority score ──────────────
         PriorityQueue<Request> pq = new PriorityQueue<>(
             (a, b) -> {
-                // Higher priority first
-                if (b.priority != a.priority)
-                    return b.priority - a.priority;
 
-                // If same priority → earlier end time first
-                return a.endTime - b.endTime;
+                int karmaA = studentKarmaMap.getOrDefault(a.getStudentName(), 0);
+                int karmaB = studentKarmaMap.getOrDefault(b.getStudentName(), 0);
+
+                double scoreA = a.computePriorityScore(karmaA);
+                double scoreB = b.computePriorityScore(karmaB);
+
+                // Higher score → higher priority (max heap)
+                if (Double.compare(scoreB, scoreA) != 0)
+                    return Double.compare(scoreB, scoreA);
+
+                // Tiebreaker 1: Earlier deadline first (EDF)
+                if (a.getDeadline() != b.getDeadline())
+                    return a.getDeadline() - b.getDeadline();
+
+                // Tiebreaker 2: Earlier end time first
+                return a.getEndTime() - b.getEndTime();
             }
         );
 
-        // Insert all requests into heap
         pq.addAll(requests);
 
-        List<Request> selected = new ArrayList<>();
+        List<Request> allocated   = new ArrayList<>();
+        List<Request> waitlisted  = new ArrayList<>();
 
-        // Process requests in priority order
+        // ── Process requests in priority order ─────────────────────────────
         while (!pq.isEmpty()) {
 
             Request current = pq.poll();
+
+            // ── DIGITAL: No conflict — allocate immediately ─────────────────
+            if (current.getResourceType() == Request.ResourceType.DIGITAL) {
+                current.setStatus(Request.Status.ALLOCATED);
+                allocated.add(current);
+                continue;
+            }
+
+            // ── PHYSICAL: Check interval conflict ───────────────────────────
             boolean conflict = false;
 
-            // Check overlap with already selected requests
-            for (Request allocated : selected) {
+            for (Request done : allocated) {
 
-                // If intervals overlap → conflict
-                if (!(current.endTime <= allocated.startTime ||
-                      current.startTime >= allocated.endTime)) {
+                // Only conflict if same resource name AND overlapping time
+                if (done.getResourceType() == Request.ResourceType.PHYSICAL
+                    && done.getResourceName().equals(current.getResourceName())) {
 
-                    conflict = true;
-                    break;
+                    // Overlap condition: NOT (current ends before done starts
+                    //                        OR current starts after done ends)
+                    boolean overlaps = !(current.getEndTime()   <= done.getStartTime()
+                                      || current.getStartTime() >= done.getEndTime());
+
+                    if (overlaps) {
+                        conflict = true;
+                        break;
+                    }
                 }
             }
 
-            // If no conflict → select request
             if (!conflict) {
-                selected.add(current);
+                current.setStatus(Request.Status.ALLOCATED);
+                allocated.add(current);
+            } else {
+                current.setStatus(Request.Status.WAITLISTED);
+                waitlisted.add(current);
             }
         }
 
-        return selected;
+        // ── Return allocated + waitlisted together for full picture ─────────
+        List<Request> result = new ArrayList<>(allocated);
+        result.addAll(waitlisted);
+        return result;
+    }
+
+    /*
+     * suggestNextSlot(resourceName, allocated)
+     *
+     * When a request is rejected due to conflict, suggest the
+     * nearest free time slot for the same resource.
+     *
+     * Strategy: Find all allocated slots for the resource,
+     *            sort by end time, return the first gap or
+     *            the time after the last slot ends.
+     *
+     * Time Complexity: O(k log k) where k = allocated slots for resource
+     */
+    public static int suggestNextSlot(String resourceName, List<Request> allocated) {
+
+        List<int[]> slots = new ArrayList<>();
+
+        for (Request r : allocated) {
+            if (r.getResourceType() == Request.ResourceType.PHYSICAL
+                && r.getResourceName().equals(resourceName)
+                && r.getStatus() == Request.Status.ALLOCATED) {
+
+                slots.add(new int[]{ r.getStartTime(), r.getEndTime() });
+            }
+        }
+
+        if (slots.isEmpty()) return 0;  // Resource is free now
+
+        // Sort by end time
+        slots.sort((a, b) -> a[1] - b[1]);
+
+        // Return the end time of the last slot = earliest free moment
+        return slots.get(slots.size() - 1)[1];
     }
 }
