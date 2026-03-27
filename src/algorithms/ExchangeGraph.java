@@ -3,11 +3,12 @@ package algorithms;
 import java.util.*;
 
 /*
+  his module detects mutual exchange opportunities between students using graph cycle detection.
  * ExchangeGraph.java
  *
  * Directed graph where:
- *   Vertex = Student
- *   Edge (A → B) = Student A wants a resource currently owned by Student B
+ *   Vertex(Node) = Student
+ *   Edge (A → B) = A wants resource owned by B
  *
  * A cycle in this graph means a mutual exchange is possible.
  *

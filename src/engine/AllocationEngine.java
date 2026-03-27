@@ -10,40 +10,36 @@ import algorithms.ExchangeGraph;
 /*
  * AllocationEngine.java
  *
- * Central controller for the Smart Campus Resource Allocation System.
+ * Central controller for Smart Campus Resource Exchange System.
  *
  * Responsibilities:
- *  1. Manage students, resources, and requests
- *  2. Enforce the karma credit access gate before accepting requests
- *  3. Coordinate with PriorityScheduler for allocation
- *  4. Coordinate with ExchangeGraph for exchange cycle detection
- *  5. Maintain leaderboard (sorted by karma credits)
- *  6. Handle resource rating and karma bonus distribution
+ *  1. Manage students, resources, requests
+ *  2. Match RENT requests using PriorityScheduler (conflict-free)
+ *  3. Match BUY requests using ExchangeGraph (cycle detection)
+ *  4. Reveal contact details only when a match is made
+ *  5. Handle digital resource listings (free access)
  *
- * This class is the bridge between data models and algorithm layer.
- * UI/Main should only interact with AllocationEngine — never directly
- * with PriorityScheduler or ExchangeGraph.
+ * No karma credits. No payments.
+ * System only connects people — deals made in person.
  *
  * Separation of Concerns:
- *   AllocationEngine  → orchestration + business rules
- *   PriorityScheduler → scheduling algorithm
- *   ExchangeGraph     → graph + cycle detection
+ *   AllocationEngine  → orchestration + matching logic
+ *   PriorityScheduler → rent conflict detection + scheduling
+ *   ExchangeGraph     → buy/sell cycle detection
  */
 
 public class AllocationEngine {
 
     // ─── Data Stores ──────────────────────────────────────────────────────────
 
-    private Map<String, Student>  students     = new LinkedHashMap<>();
-    private Map<String, Resource> resourcePool = new LinkedHashMap<>();
-    private List<Request>         requests     = new ArrayList<>();
-
-    // Last allocation result — cached for exchange detection and display
-    private List<Request> lastAllocationResult = new ArrayList<>();
+    private Map<String, Student>  students     = new LinkedHashMap<>();   //Stores all students
+    private Map<String, Resource> resourcePool = new LinkedHashMap<>();   //All listings (SELL / RENT / DIGITAL)
+    private List<Request>         requests     = new ArrayList<>();      // All buy + rent requests
+    private List<Request>         lastAllocationResult = new ArrayList<>();
 
     // ─── Student Management ───────────────────────────────────────────────────
 
-    public void addStudent(Student student) {
+    public void addStudent(Student student) {    // Stores student in system
         students.put(student.getName(), student);
     }
 
@@ -60,38 +56,18 @@ public class AllocationEngine {
     /*
      * addResource(resource)
      *
-     * Adds a resource to the pool and credits the owning student.
-     * This is where karma credits are earned for contributions.
+     * Adds a resource listing to the pool.
+     * Owner's listing count is incremented.
      *
-     * Credit rules (defined in Student.java constants):
-     *   DIGITAL  → +2 credits
-     *   PHYSICAL → +3 credits
+     * SELL    → listed for permanent sale
+     * RENT    → listed for short term use
+     * DIGITAL → Google Drive link listed for free access
      */
-    public boolean addResource(Resource resource) {
-
-        // Duplicate digital resource detection via file hash
-        if (resource.getType() == Resource.ResourceType.DIGITAL
-            && resource.getFileHash() != null) {
-
-            for (Resource existing : resourcePool.values()) {
-                if (resource.getFileHash().equals(existing.getFileHash())) {
-                    System.out.println("Duplicate resource detected. Upload rejected.");
-                    return false;
-                }
-            }
-        }
-
+    public boolean addResource(Resource resource) {      // Links resource ownership with student data
         resourcePool.put(resource.getResourceId(), resource);
 
-        // Credit the contributing student
         Student owner = students.get(resource.getOwnedBy());
-        if (owner != null) {
-            if (resource.getType() == Resource.ResourceType.DIGITAL) {
-                owner.contributeDigital();
-            } else {
-                owner.contributePhysical();
-            }
-        }
+        if (owner != null) owner.incrementListings();
 
         return true;
     }
@@ -109,13 +85,9 @@ public class AllocationEngine {
     /*
      * addRequest(request)
      *
-     * Access gate enforced here:
-     *   Student must have karmaCredits > 0 to submit a request.
-     *   Students with zero credits can browse but cannot request.
-     *
-     * Returns:
-     *   true  → request accepted
-     *   false → rejected (no credits or student not found)
+     * Accepts any request — no credit gate.
+     * BUY requests → matched via exchange graph
+     * RENT requests → matched via priority scheduler
      */
     public boolean addRequest(Request request) {
 
@@ -123,13 +95,6 @@ public class AllocationEngine {
 
         if (student == null) {
             System.out.println("Student not found: " + request.getStudentName());
-            return false;
-        }
-
-        // ── ACCESS GATE ──────────────────────────────────────────────────────
-        if (!student.canRequest()) {
-            System.out.println(request.getStudentName()
-                + " has 0 karma credits. Contribute a resource first to unlock requests.");
             return false;
         }
 
@@ -142,33 +107,33 @@ public class AllocationEngine {
         return Collections.unmodifiableList(requests);
     }
 
-    // ─── Core Allocation ──────────────────────────────────────────────────────
+    // ─── Rent Allocation (Priority Scheduler) ────────────────────────────────
 
     /*
-     * runPriorityAllocation()
+     * runRentAllocation()
      *
-     * Builds karma map → passes to PriorityScheduler → charges credits
-     * for all successfully allocated requests.
+     * Processes all RENT requests through PriorityScheduler.
+     * Conflict-free scheduling — no two students get same
+     * physical resource at overlapping times.
      *
-     * Returns full result list (ALLOCATED + WAITLISTED).
+     * On match → reveals owner contact to requester.
      */
-    public List<Request> runPriorityAllocation() {
+    public List<Request> runRentAllocation() {
 
-        // Build karma map for scheduler's composite score computation
-        Map<String, Integer> karmaMap = new HashMap<>();
-        for (Student s : students.values()) {
-            karmaMap.put(s.getName(), s.getKarmaCredits());
+        // Filter only RENT requests
+        List<Request> rentRequests = new ArrayList<>();
+        for (Request r : requests) {
+            if (r.getRequestType() == Request.RequestType.NEED_TO_RENT) {
+                rentRequests.add(r);
+            }
         }
 
-        lastAllocationResult = PriorityScheduler.allocate(
-            new ArrayList<>(requests), karmaMap
-        );
+        lastAllocationResult = PriorityScheduler.allocate(rentRequests);
 
-        // Charge -1 credit for each successfully allocated request
+        // Reveal contact for matched requests
         for (Request r : lastAllocationResult) {
-            if (r.getStatus() == Request.Status.ALLOCATED) {
-                Student s = students.get(r.getStudentName());
-                if (s != null) s.chargeForRequest();
+            if (r.getStatus() == Request.Status.MATCHED) {
+                revealContact(r);
             }
         }
 
@@ -176,67 +141,88 @@ public class AllocationEngine {
     }
 
     /*
+     * revealContact(request)
+     *
+     * Finds the owner of the requested resource
+     * and prints their contact details to the requester.
+     *
+     * In JavaFX this will show a popup instead of console print.
+     */
+    private void revealContact(Request request) {
+        for (Resource res : resourcePool.values()) {
+            if (res.getResourceName().equals(request.getResourceName())) {
+                Student owner = students.get(res.getOwnedBy());
+                if (owner != null) {
+                    System.out.println("\n  MATCH FOUND for " + request.getStudentName());
+                    System.out.println("  Contact owner: " + owner.getName());
+                    System.out.println("  Phone    : " + owner.getContactNumber());
+                    System.out.println("  WhatsApp : " + owner.getWhatsappNumber());
+                    System.out.println("  Meet in person to complete the deal.");
+                }
+                break;
+            }
+        }
+    }
+
+    /*
      * suggestNextAvailableSlot(resourceName)
      *
-     * When a physical request is rejected, suggest the next free slot.
-     * Delegates to PriorityScheduler.suggestNextSlot().
+     * When a RENT request is rejected due to conflict,
+     * suggest the next free time slot for that resource.
      */
     public int suggestNextAvailableSlot(String resourceName) {
         return PriorityScheduler.suggestNextSlot(resourceName, lastAllocationResult);
     }
 
-    // ─── Exchange Cycle Detection ─────────────────────────────────────────────
+    // ─── Buy Matching (Exchange Graph) ───────────────────────────────────────
 
     /*
      * checkExchangeCycle()
      *
-     * Builds exchange graph from actual want/have relationships:
-     *   Edge (A → B) = Student A wants a resource owned by Student B
+     * Detects mutual swap possibility for BUY requests.
      *
-     * A cycle means mutual swap is possible — no extra resources needed.
+     * Edge (A -> B) = Student A wants resource owned by Student B
+     * Cycle = both can swap directly, no extra cost
      *
-     * Returns true if any exchange cycle exists.
+     * On cycle detected -> reveals both parties' contacts to each other.
      */
     public boolean checkExchangeCycle() {
 
-        ExchangeGraph graph = new ExchangeGraph();
+        ExchangeGraph graph = buildExchangeGraph();
+        boolean cycleFound  = graph.hasCycle();
 
-        for (Request requester : requests) {
-            String wanter        = requester.getStudentName();
-            String resourceWanted = requester.getResourceName();
+        if (cycleFound) {
+            List<String> cycle = graph.getDetectedCycle();
+            System.out.println("\n  EXCHANGE CYCLE DETECTED: " + String.join(" -> ", cycle));
+            System.out.println("  These students can swap directly. Revealing contacts:\n");
 
-            // Find who owns the wanted resource
-            for (Resource res : resourcePool.values()) {
-                if (res.getResourceName().equals(resourceWanted)) {
-                    String owner = res.getOwnedBy();
-
-                    // No self-loops — student can't exchange with themselves
-                    if (!owner.equals(wanter)) {
-                        graph.addEdge(wanter, owner);
-                    }
+            for (String studentName : cycle) {
+                Student s = students.get(studentName);
+                if (s != null) {
+                    System.out.println("  " + s.getName()
+                        + " | Phone: " + s.getContactNumber()
+                        + " | WhatsApp: " + s.getWhatsappNumber());
                 }
             }
         }
 
-        return graph.hasCycle();
+        return cycleFound;
     }
 
-    /*
-     * getExchangeGraph()
-     *
-     * Returns the fully built ExchangeGraph for display or further analysis.
-     * Useful for JavaFX graph visualization.
-     */
-    public ExchangeGraph getExchangeGraph() {
+    private ExchangeGraph buildExchangeGraph() {
 
         ExchangeGraph graph = new ExchangeGraph();
 
         for (Request requester : requests) {
-            String wanter         = requester.getStudentName();
+            if (requester.getRequestType() != Request.RequestType.NEED_TO_BUY) continue;
+
+            String wanter        = requester.getStudentName();
             String resourceWanted = requester.getResourceName();
 
             for (Resource res : resourcePool.values()) {
-                if (res.getResourceName().equals(resourceWanted)) {
+                if (res.getResourceName().equals(resourceWanted)
+                    && res.getListingType() == Resource.ListingType.SELL) {
+
                     String owner = res.getOwnedBy();
                     if (!owner.equals(wanter)) {
                         graph.addEdge(wanter, owner);
@@ -248,55 +234,26 @@ public class AllocationEngine {
         return graph;
     }
 
-    // ─── Rating System ────────────────────────────────────────────────────────
+    public ExchangeGraph getExchangeGraph() {
+        return buildExchangeGraph();
+    }
+
+    // ─── Digital Resources ────────────────────────────────────────────────────
 
     /*
-     * rateResource(resourceId, stars)
+     * getDigitalResources()
      *
-     * Student rates a resource after use.
-     * If rating >= 4.0 → owner receives +1 karma bonus.
-     *
-     * This rewards quality contributions, not just quantity.
+     * Returns all digital listings with their download links.
+     * No request needed — freely accessible.
      */
-    public void rateResource(String resourceId, double stars) {
-
-        Resource resource = resourcePool.get(resourceId);
-        if (resource == null) return;
-
-        resource.addRating(stars);
-
-        // Bonus karma for high-quality resource
-        if (stars >= 4.0) {
-            Student owner = students.get(resource.getOwnedBy());
-            if (owner != null) owner.receiveRatingBonus();
+    public List<Resource> getDigitalResources() {
+        List<Resource> digital = new ArrayList<>();
+        for (Resource r : resourcePool.values()) {
+            if (r.getListingType() == Resource.ListingType.DIGITAL) {
+                digital.add(r);
+            }
         }
-    }
-
-    // ─── No-Show Penalty ──────────────────────────────────────────────────────
-
-    /*
-     * applyNoShowPenalty(studentName)
-     *
-     * Called when a student confirms allocation but doesn't use the resource.
-     * Deducts 2 credits — heavier than the normal -1 request cost.
-     */
-    public void applyNoShowPenalty(String studentName) {
-        Student student = students.get(studentName);
-        if (student != null) student.applyNoShowPenalty();
-    }
-
-    // ─── Leaderboard ──────────────────────────────────────────────────────────
-
-    /*
-     * getLeaderboard()
-     *
-     * Returns students sorted by karma credits (descending).
-     * Credits = real currency in this system, so leaderboard = actual influence.
-     */
-    public List<Student> getLeaderboard() {
-        List<Student> sorted = new ArrayList<>(students.values());
-        sorted.sort((a, b) -> b.getKarmaCredits() - a.getKarmaCredits());
-        return sorted;
+        return digital;
     }
 
     // ─── Display ──────────────────────────────────────────────────────────────
@@ -311,9 +268,18 @@ public class AllocationEngine {
 
     public void displayAllResources() {
         if (resourcePool.isEmpty()) {
-            System.out.println("No resources in pool.");
+            System.out.println("No resources listed.");
             return;
         }
         resourcePool.values().forEach(System.out::println);
+    }
+
+    public void displayDigitalResources() {
+        List<Resource> digital = getDigitalResources();
+        if (digital.isEmpty()) {
+            System.out.println("No digital resources available.");
+            return;
+        }
+        digital.forEach(System.out::println);
     }
 }

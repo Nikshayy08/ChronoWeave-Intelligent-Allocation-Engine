@@ -1,102 +1,107 @@
 package models;
 
-import java.util.ArrayList;
-import java.util.List;
-
 /*
  * Resource.java
  *
- * Represents a resource in the system — either physical or digital.
+ * Represents a resource listed in the Smart Campus Resource Exchange System.
  *
- * Physical: Drafter, lab instrument, calculator → one user at a time
- * Digital : Notes, PDFs, PYQs                  → multiple users simultaneously
+ * Three types of listings:
  *
- * Key Design:
- *  - Physical resources use interval conflict detection
- *  - Digital resources skip conflict detection entirely
- *  - fileHash enables duplicate detection for digital uploads (SHA-256)
+ *  SELL    → Senior lists item for permanent sale
+ *            Buyer posts request OR seller posts listing
+ *            Deal made in person, real money exchanged
+ *
+ *  RENT    → Owner lists item for short-term use
+ *            Needy student posts request with offering price
+ *            Owner reaches out, meet in person, item returned after use
+ *
+ *  DIGITAL → Student uploads Google Drive link for notes/PYQs
+ *            Anyone can access freely, no payment needed
  *
  * DAA Relevance:
- *  - Drives the bifurcated scheduling logic in PriorityScheduler
- *  - Tags enable Trie-based search (future enhancement)
+ *  RENT resources → interval conflict detection (PriorityScheduler)
+ *  SELL resources → exchange graph cycle detection (ExchangeGraph)
+ *  DIGITAL        → no conflict, free access
  */
 
 public class Resource {
 
-    // ─── Enum ─────────────────────────────────────────────────────────────────
+    // ─── Enums ────────────────────────────────────────────────────────────────
 
     public enum ResourceType {
-        PHYSICAL,
-        DIGITAL
+        PHYSICAL,   // Drafter, calculator, lab kit — one user at a time
+        DIGITAL     // Notes, PYQs, PDFs — freely shareable
+    }
+
+    public enum ListingType {
+        SELL,       // Permanent ownership transfer
+        RENT,       // Short term, item returned after use
+        DIGITAL     // Free download via link
     }
 
     // ─── Fields ───────────────────────────────────────────────────────────────
 
     private String resourceId;
     private String resourceName;
-    private ResourceType type;
-    private String ownedBy;         // Student name who owns or uploaded this
+    private ResourceType resourceType;
+    private ListingType listingType;
+    private String ownedBy;           // Student name who owns or uploaded it
     private boolean available;
-    private List<String> tags;      // e.g. ["CSE", "3rd-sem", "lab"]
-    private String fileHash;        // SHA-256 hash — prevents duplicate digital uploads
-    private double averageRating;   // Peer rating after use (1.0–5.0)
-    private int ratingCount;        // Number of ratings received
+
+    // SELL / RENT specific
+    private double askingPrice;       // In rupees — just displayed, not processed
+
+    // DIGITAL specific
+    private String downloadLink;      // Google Drive or any public URL
 
     // ─── Constructor ──────────────────────────────────────────────────────────
 
     public Resource(String resourceId, String resourceName,
-                    ResourceType type, String ownedBy) {
-
-        this.resourceId    = resourceId;
-        this.resourceName  = resourceName;
-        this.type          = type;
-        this.ownedBy       = ownedBy;
-        this.available     = true;
-        this.tags          = new ArrayList<>();
-        this.fileHash      = null;
-        this.averageRating = 0.0;
-        this.ratingCount   = 0;
-    }
-
-    // ─── Rating System ────────────────────────────────────────────────────────
-
-    /*
-     * addRating(stars)
-     *
-     * Running average — no need to store all ratings.
-     * newAvg = ((oldAvg * count) + newRating) / (count + 1)
-     */
-    public void addRating(double stars) {
-        if (stars < 1.0 || stars > 5.0) return;
-        averageRating = ((averageRating * ratingCount) + stars) / (ratingCount + 1);
-        ratingCount++;
+                    ResourceType resourceType, ListingType listingType,
+                    String ownedBy) {
+        this.resourceId   = resourceId;
+        this.resourceName = resourceName;
+        this.resourceType = resourceType;
+        this.listingType  = listingType;
+        this.ownedBy      = ownedBy;
+        this.available    = true;
+        this.askingPrice  = 0.0;
+        this.downloadLink = null;
     }
 
     // ─── Getters ──────────────────────────────────────────────────────────────
 
-    public String getResourceId()       { return resourceId; }
-    public String getResourceName()     { return resourceName; }
-    public ResourceType getType()       { return type; }
-    public String getOwnedBy()          { return ownedBy; }
-    public boolean isAvailable()        { return available; }
-    public List<String> getTags()       { return tags; }
-    public String getFileHash()         { return fileHash; }
-    public double getAverageRating()    { return averageRating; }
-    public int getRatingCount()         { return ratingCount; }
+    public String getResourceId()         { return resourceId; }
+    public String getResourceName()       { return resourceName; }
+    public ResourceType getResourceType() { return resourceType; }
+    public ListingType getListingType()   { return listingType; }
+    public String getOwnedBy()            { return ownedBy; }
+    public boolean isAvailable()          { return available; }
+    public double getAskingPrice()        { return askingPrice; }
+    public String getDownloadLink()       { return downloadLink; }
 
     // ─── Setters ──────────────────────────────────────────────────────────────
 
-    public void setAvailable(boolean available) { this.available = available; }
-    public void setFileHash(String hash)        { this.fileHash = hash; }
-    public void addTag(String tag)              { this.tags.add(tag); }
+    public void setAvailable(boolean available)   { this.available = available; }
+    public void setAskingPrice(double price)      { this.askingPrice = price; }
+    public void setDownloadLink(String link)      { this.downloadLink = link; }
 
     // ─── Display ──────────────────────────────────────────────────────────────
 
     @Override
     public String toString() {
-        return String.format("[%s] %s | Owner: %s | %s | Rating: %.1f (%d reviews) | Tags: %s",
-                type, resourceName, ownedBy,
-                available ? "✓ Available" : "✗ In Use",
-                averageRating, ratingCount, tags);
+        String base = String.format("[%s][%s] %s | Owner: %s | %s",
+                listingType, resourceType, resourceName, ownedBy,
+                available ? "Available" : "Unavailable");
+
+        if (listingType == ListingType.SELL || listingType == ListingType.RENT) {
+            base += String.format(" | Price: Rs.%.0f", askingPrice);
+        }
+
+        if (listingType == ListingType.DIGITAL && downloadLink != null) {
+            base += " | Link: " + downloadLink;
+        }
+
+        return base;
     }
 }
