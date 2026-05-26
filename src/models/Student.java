@@ -10,7 +10,7 @@ package models;
  *  - Contact details revealed only when a deal is matched
  *  - Listing and request counters for activity tracking
  *
- * No karma credits — real money handled in person.
+ *  Real money handled in person.
  */
 
 public class Student {

@@ -3,7 +3,7 @@ package algorithms;
 import java.util.*;
 
 /*
-  his module detects mutual exchange opportunities between students using graph cycle detection.
+  this module detects mutual exchange opportunities between students using graph cycle detection.
  * ExchangeGraph.java
  *
  * Directed graph where:

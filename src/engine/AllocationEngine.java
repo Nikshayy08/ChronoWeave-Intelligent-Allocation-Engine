@@ -6,41 +6,75 @@ import models.Resource;
 import models.Student;
 import algorithms.PriorityScheduler;
 import algorithms.ExchangeGraph;
+import database.DatabaseManager;
 
 /*
  * AllocationEngine.java
  *
  * Central controller for Smart Campus Resource Exchange System.
  *
- * Responsibilities:
- *  1. Manage students, resources, requests
- *  2. Match RENT requests using PriorityScheduler (conflict-free)
- *  3. Match BUY requests using ExchangeGraph (cycle detection)
- *  4. Reveal contact details only when a match is made
- *  5. Handle digital resource listings (free access)
- *
- * No karma credits. No payments.
- * System only connects people — deals made in person.
- *
- * Separation of Concerns:
- *   AllocationEngine  → orchestration + matching logic
- *   PriorityScheduler → rent conflict detection + scheduling
- *   ExchangeGraph     → buy/sell cycle detection
+ * Now integrated with SQLite via DatabaseManager.
+ * All add operations are persisted to DB automatically.
+ * Data is loaded from DB on startup.
  */
 
 public class AllocationEngine {
 
-    // ─── Data Stores ──────────────────────────────────────────────────────────
+    private Map<String, Student> students = new LinkedHashMap<>();
+    private Map<String, Resource> resourcePool = new LinkedHashMap<>();
+    private List<Request> requests = new ArrayList<>();
+    private List<Request> lastAllocationResult = new ArrayList<>();
 
-    private Map<String, Student>  students     = new LinkedHashMap<>();   //Stores all students
-    private Map<String, Resource> resourcePool = new LinkedHashMap<>();   //All listings (SELL / RENT / DIGITAL)
-    private List<Request>         requests     = new ArrayList<>();      // All buy + rent requests
-    private List<Request>         lastAllocationResult = new ArrayList<>();
+    private DatabaseManager db;
 
-    // ─── Student Management ───────────────────────────────────────────────────
+    // ── Constructor ───────────────────────────────────────────────────────────
 
-    public void addStudent(Student student) {    // Stores student in system
+    public AllocationEngine() {
+        this.db = null; // DB disabled by default, set via setDatabase()
+    }
+
+    public AllocationEngine(DatabaseManager db) {
+        this.db = db;
+    }
+
+    public void setDatabase(DatabaseManager db) {
+        this.db = db;
+    }
+
+    /*
+     * loadFromDatabase()
+     * Called on startup — loads all persisted data into memory.
+     */
+    public void loadFromDatabase() {
+        if (db == null || !db.isConnected())
+            return;
+
+        System.out.println("Loading data from database...");
+
+        for (Student s : db.loadAllStudents()) {
+            students.put(s.getName(), s);
+        }
+
+        for (Resource r : db.loadAllResources()) {
+            resourcePool.put(r.getResourceId(), r);
+        }
+
+        for (Request r : db.loadAllRequests()) {
+            requests.add(r);
+        }
+
+        System.out.println("Loaded: " + students.size() + " students, "
+                + resourcePool.size() + " resources, "
+                + requests.size() + " requests.");
+    }
+
+    // ── Student Management ────────────────────────────────────────────────────
+
+    public void addStudent(Student student) {
         students.put(student.getName(), student);
+        if (db != null && db.isConnected()) {
+            db.saveStudent(student);
+        }
     }
 
     public Student getStudent(String name) {
@@ -51,25 +85,16 @@ public class AllocationEngine {
         return Collections.unmodifiableMap(students);
     }
 
-    // ─── Resource Management ──────────────────────────────────────────────────
+    // ── Resource Management ───────────────────────────────────────────────────
 
-    /*
-     * addResource(resource)
-     *
-     * Adds a resource listing to the pool.
-     * Owner's listing count is incremented.
-     *
-     * SELL    → listed for permanent sale
-     * RENT    → listed for short term use
-     * DIGITAL → Google Drive link listed for free access
-     */
-    public boolean addResource(Resource resource) {      // Links resource ownership with student data
+    public void addResource(Resource resource) {
         resourcePool.put(resource.getResourceId(), resource);
-
         Student owner = students.get(resource.getOwnedBy());
-        if (owner != null) owner.incrementListings();
-
-        return true;
+        if (owner != null)
+            owner.incrementListings();
+        if (db != null && db.isConnected()) {
+            db.saveResource(resource);
+        }
     }
 
     public Resource getResource(String resourceId) {
@@ -80,26 +105,19 @@ public class AllocationEngine {
         return Collections.unmodifiableMap(resourcePool);
     }
 
-    // ─── Request Management ───────────────────────────────────────────────────
+    // ── Request Management ────────────────────────────────────────────────────
 
-    /*
-     * addRequest(request)
-     *
-     * Accepts any request — no credit gate.
-     * BUY requests → matched via exchange graph
-     * RENT requests → matched via priority scheduler
-     */
     public boolean addRequest(Request request) {
-
         Student student = students.get(request.getStudentName());
-
         if (student == null) {
             System.out.println("Student not found: " + request.getStudentName());
             return false;
         }
-
         requests.add(request);
         student.incrementRequests();
+        if (db != null && db.isConnected()) {
+            db.saveRequest(request);
+        }
         return true;
     }
 
@@ -107,130 +125,134 @@ public class AllocationEngine {
         return Collections.unmodifiableList(requests);
     }
 
-    // ─── Rent Allocation (Priority Scheduler) ────────────────────────────────
+    // ── Rent Allocation ───────────────────────────────────────────────────────
 
-    /*
-     * runRentAllocation()
-     *
-     * Processes all RENT requests through PriorityScheduler.
-     * Conflict-free scheduling — no two students get same
-     * physical resource at overlapping times.
-     *
-     * On match → reveals owner contact to requester.
-     */
     public List<Request> runRentAllocation() {
-
-        // Filter only RENT requests
         List<Request> rentRequests = new ArrayList<>();
         for (Request r : requests) {
             if (r.getRequestType() == Request.RequestType.NEED_TO_RENT) {
                 rentRequests.add(r);
             }
         }
-
         lastAllocationResult = PriorityScheduler.allocate(rentRequests);
 
-        // Reveal contact for matched requests
         for (Request r : lastAllocationResult) {
             if (r.getStatus() == Request.Status.MATCHED) {
-                revealContact(r);
+                if (db != null && db.isConnected()) {
+                    db.updateRequestStatus(r.getStudentName(), r.getResourceName(), Request.Status.MATCHED);
+                }
             }
         }
-
         return lastAllocationResult;
     }
 
-    /*
-     * revealContact(request)
-     *
-     * Finds the owner of the requested resource
-     * and prints their contact details to the requester.
-     *
-     * In JavaFX this will show a popup instead of console print.
-     */
-    private void revealContact(Request request) {
-        for (Resource res : resourcePool.values()) {
-            if (res.getResourceName().equals(request.getResourceName())) {
-                Student owner = students.get(res.getOwnedBy());
-                if (owner != null) {
-                    System.out.println("\n  MATCH FOUND for " + request.getStudentName());
-                    System.out.println("  Contact owner: " + owner.getName());
-                    System.out.println("  Phone    : " + owner.getContactNumber());
-                    System.out.println("  WhatsApp : " + owner.getWhatsappNumber());
-                    System.out.println("  Meet in person to complete the deal.");
-                }
-                break;
-            }
-        }
-    }
-
-    /*
-     * suggestNextAvailableSlot(resourceName)
-     *
-     * When a RENT request is rejected due to conflict,
-     * suggest the next free time slot for that resource.
-     */
     public int suggestNextAvailableSlot(String resourceName) {
         return PriorityScheduler.suggestNextSlot(resourceName, lastAllocationResult);
     }
 
-    // ─── Buy Matching (Exchange Graph) ───────────────────────────────────────
+    // ── Buy Matching ──────────────────────────────────────────────────────────
 
-    /*
-     * checkExchangeCycle()
-     *
-     * Detects mutual swap possibility for BUY requests.
-     *
-     * Edge (A -> B) = Student A wants resource owned by Student B
-     * Cycle = both can swap directly, no extra cost
-     *
-     * On cycle detected -> reveals both parties' contacts to each other.
-     */
-    public boolean checkExchangeCycle() {
+    public List<String> runBuyMatching() {
+        List<String> results = new ArrayList<>();
 
-        ExchangeGraph graph = buildExchangeGraph();
-        boolean cycleFound  = graph.hasCycle();
+        for (Request request : requests) {
+            if (request.getRequestType() != Request.RequestType.NEED_TO_BUY)
+                continue;
+            if (request.getStatus() == Request.Status.MATCHED)
+                continue;
 
-        if (cycleFound) {
-            List<String> cycle = graph.getDetectedCycle();
-            System.out.println("\n  EXCHANGE CYCLE DETECTED: " + String.join(" -> ", cycle));
-            System.out.println("  These students can swap directly. Revealing contacts:\n");
+            String wantedResource = request.getResourceName();
+            String buyerName = request.getStudentName();
+            double buyerBudget = request.getOfferingPrice();
 
-            for (String studentName : cycle) {
-                Student s = students.get(studentName);
-                if (s != null) {
-                    System.out.println("  " + s.getName()
-                        + " | Phone: " + s.getContactNumber()
-                        + " | WhatsApp: " + s.getWhatsappNumber());
+            boolean foundListing = false;
+
+            for (Resource res : resourcePool.values()) {
+                if (!res.getResourceName().equalsIgnoreCase(wantedResource))
+                    continue;
+                if (res.getListingType() != Resource.ListingType.SELL)
+                    continue;
+                if (!res.isAvailable())
+                    continue;
+
+                foundListing = true;
+                String sellerName = res.getOwnedBy();
+                double sellerPrice = res.getAskingPrice();
+
+                if (buyerBudget >= sellerPrice) {
+                    request.setStatus(Request.Status.MATCHED);
+                    res.setAvailable(false);
+
+                    if (db != null && db.isConnected()) {
+                        db.updateRequestStatus(buyerName, wantedResource, Request.Status.MATCHED);
+                        db.updateResourceAvailability(res.getResourceId(), false);
+                    }
+
+                    Student buyer = students.get(buyerName);
+                    Student seller = students.get(sellerName);
+
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("====== BUY MATCH FOUND ======\n");
+                    sb.append("Resource  : ").append(res.getResourceName()).append("\n");
+                    sb.append("Buyer     : ").append(buyerName)
+                            .append("  |  Budget: Rs.").append((int) buyerBudget).append("\n");
+                    sb.append("Seller    : ").append(sellerName)
+                            .append("  |  Asking: Rs.").append((int) sellerPrice).append("\n\n");
+                    if (buyer != null) {
+                        sb.append("Buyer Contact:\n");
+                        sb.append("  Phone    : ").append(buyer.getContactNumber()).append("\n");
+                        sb.append("  WhatsApp : ").append(buyer.getWhatsappNumber()).append("\n\n");
+                    }
+                    if (seller != null) {
+                        sb.append("Seller Contact:\n");
+                        sb.append("  Phone    : ").append(seller.getContactNumber()).append("\n");
+                        sb.append("  WhatsApp : ").append(seller.getWhatsappNumber()).append("\n\n");
+                    }
+                    sb.append("Action: Meet in person to complete the deal.\n");
+                    sb.append("=============================\n");
+                    results.add(sb.toString());
+                    break;
+
+                } else {
+                    results.add("BUDGET TOO LOW: " + buyerName + " wants " + wantedResource
+                            + " | Budget Rs." + (int) buyerBudget
+                            + " < Asking Rs." + (int) sellerPrice + "\n");
                 }
+            }
+
+            if (!foundListing && request.getStatus() == Request.Status.PENDING) {
+                results.add("NO LISTING FOUND: No one has listed '"
+                        + wantedResource + "' for sale yet.\n");
             }
         }
 
-        return cycleFound;
+        if (results.isEmpty())
+            results.add("No BUY requests to process.");
+        return results;
+    }
+
+    // ── Exchange Cycle Detection ──────────────────────────────────────────────
+
+    public boolean checkExchangeCycle() {
+        return buildExchangeGraph().hasCycle();
     }
 
     private ExchangeGraph buildExchangeGraph() {
-
         ExchangeGraph graph = new ExchangeGraph();
-
         for (Request requester : requests) {
-            if (requester.getRequestType() != Request.RequestType.NEED_TO_BUY) continue;
-
-            String wanter        = requester.getStudentName();
+            if (requester.getRequestType() != Request.RequestType.NEED_TO_BUY)
+                continue;
+            String wanter = requester.getStudentName();
             String resourceWanted = requester.getResourceName();
-
             for (Resource res : resourcePool.values()) {
-                if (res.getResourceName().equals(resourceWanted)
-                    && res.getListingType() == Resource.ListingType.SELL) {
-
+                if (res.getResourceName().equalsIgnoreCase(resourceWanted)
+                        && res.getListingType() == Resource.ListingType.SELL) {
                     String owner = res.getOwnedBy();
-                    if (!owner.equals(wanter)) {
+                    if (!owner.equals(wanter))
                         graph.addEdge(wanter, owner);
-                    }
                 }
             }
         }
-
         return graph;
     }
 
@@ -238,29 +260,22 @@ public class AllocationEngine {
         return buildExchangeGraph();
     }
 
-    // ─── Digital Resources ────────────────────────────────────────────────────
+    // ── Digital Resources ─────────────────────────────────────────────────────
 
-    /*
-     * getDigitalResources()
-     *
-     * Returns all digital listings with their download links.
-     * No request needed — freely accessible.
-     */
     public List<Resource> getDigitalResources() {
         List<Resource> digital = new ArrayList<>();
         for (Resource r : resourcePool.values()) {
-            if (r.getListingType() == Resource.ListingType.DIGITAL) {
+            if (r.getListingType() == Resource.ListingType.DIGITAL)
                 digital.add(r);
-            }
         }
         return digital;
     }
 
-    // ─── Display ──────────────────────────────────────────────────────────────
+    // ── Display ───────────────────────────────────────────────────────────────
 
     public void displayAllRequests() {
         if (requests.isEmpty()) {
-            System.out.println("No requests in system.");
+            System.out.println("No requests.");
             return;
         }
         requests.forEach(System.out::println);
@@ -268,10 +283,18 @@ public class AllocationEngine {
 
     public void displayAllResources() {
         if (resourcePool.isEmpty()) {
-            System.out.println("No resources listed.");
+            System.out.println("No resources.");
             return;
         }
         resourcePool.values().forEach(System.out::println);
+    }
+
+    public void displayAllStudents() {
+        if (students.isEmpty()) {
+            System.out.println("No students.");
+            return;
+        }
+        students.values().forEach(System.out::println);
     }
 
     public void displayDigitalResources() {
@@ -280,6 +303,10 @@ public class AllocationEngine {
             System.out.println("No digital resources available.");
             return;
         }
-        digital.forEach(System.out::println);
+        for (Resource r : digital) {
+            System.out.println(r.getResourceName()
+                    + " | By: " + r.getOwnedBy()
+                    + " | Link: " + r.getDownloadLink());
+        }
     }
 }
