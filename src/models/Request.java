@@ -19,7 +19,9 @@ package models;
  * Key fields:
  *  offeringPrice → what the requester is willing to pay (displayed to owners)
  *  startTime     → for RENT only — when they need it
- *  endTime       → for RENT only — when they'll return it
+ *  endTime  
+ * 
+ *      → for RENT only — when they'll return it
  *
  * DAA Relevance:
  *  RENT requests → used in PriorityScheduler for conflict detection

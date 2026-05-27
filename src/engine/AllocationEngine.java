@@ -11,7 +11,7 @@ import database.DatabaseManager;
 /*
  * AllocationEngine.java
  *
- * Central controller for Smart Campus Resource Exchange System.
+ * Central controller for  Campus Resource Exchange System.
  *
  * Now integrated with SQLite via DatabaseManager.
  * All add operations are persisted to DB automatically.
@@ -158,8 +158,8 @@ public class AllocationEngine {
         for (Request request : requests) {
             if (request.getRequestType() != Request.RequestType.NEED_TO_BUY)
                 continue;
-            if (request.getStatus() == Request.Status.MATCHED)
-                continue;
+           if (request.getStatus() == Request.Status.MATCHED)
+    continue;
 
             String wantedResource = request.getResourceName();
             String buyerName = request.getStudentName();
@@ -220,7 +220,15 @@ public class AllocationEngine {
                 }
             }
 
+            // if (!foundListing && request.getStatus() == Request.Status.PENDING) {
+            // results.add("NO LISTING FOUND: No one has listed '"
+            // + wantedResource + "' for sale yet.\n");
+            // }
+
             if (!foundListing && request.getStatus() == Request.Status.PENDING) {
+
+                // request.setStatus(Request.Status.REJECTED);
+
                 results.add("NO LISTING FOUND: No one has listed '"
                         + wantedResource + "' for sale yet.\n");
             }

@@ -17,6 +17,8 @@ import database.DatabaseManager;
 
 import java.util.List;
 
+import algorithms.ExchangeGraph;
+
 public class MainApp extends Application {
 
     private static final String BG_DARK      = "#0f0f13";
@@ -584,12 +586,24 @@ public class MainApp extends Application {
 
         Button detectBtn = btn("Detect Exchange Cycle", ACCENT);
         detectBtn.setOnAction(e -> {
-            boolean cycle = engine.checkExchangeCycle();
+            // boolean cycle = engine.checkExchangeCycle();
+            
+
+
+            ExchangeGraph graph = engine.getExchangeGraph();
+            boolean cycle = graph.hasCycle();
+
+
+
             StringBuilder sb = new StringBuilder("=== EXCHANGE CYCLE DETECTION ===\n\n");
             if (!cycle) {
                 sb.append("No exchange cycle found.\n\nNo mutual swaps possible with current requests.");
             } else {
-                List<String> nodes = engine.getExchangeGraph().getDetectedCycle();
+                // List<String> nodes = engine.getExchangeGraph().getDetectedCycle();
+
+                List<String> nodes = graph.getDetectedCycle();
+
+
                 sb.append("CYCLE DETECTED!\n");
                 sb.append("Path: ").append(String.join(" -> ", nodes)).append("\n\n");
                 sb.append("These students can swap directly — no money needed.\n\n");
